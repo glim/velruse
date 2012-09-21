@@ -38,6 +38,8 @@ def add_linkedin_login_from_settings(config, prefix='velruse.linkedin.'):
     p.update('consumer_secret', required=True)
     p.update('login_path')
     p.update('callback_path')
+    p.update('scope')
+    p.update('fields')
     config.add_linkedin_login(**p.kwargs)
 
 
@@ -46,11 +48,13 @@ def add_linkedin_login(config,
                        consumer_secret,
                        login_path='/linkedin/login',
                        callback_path='/linkedin/login/callback',
-                       name='linkedin'):
+                       name='linkedin',
+                       scope='',
+                       fields=''):
     """
     Add a Last.fm login provider to the application.
-    """
-    provider = LinkedInProvider(name, consumer_key, consumer_secret)
+    """    
+    provider = LinkedInProvider(name, consumer_key, consumer_secret,scope=scope,fields=fields)
 
     config.add_route(provider.login_route, login_path)
     config.add_view(provider, attr='login', route_name=provider.login_route,
@@ -64,27 +68,31 @@ def add_linkedin_login(config,
 
 
 class LinkedInProvider(object):
-    def __init__(self, name, consumer_key, consumer_secret):
+    def __init__(self, name, consumer_key, consumer_secret,scope,fields):
         self.name = name
         self.type = 'linked_in'
         self.consumer_key = consumer_key
         self.consumer_secret = consumer_secret
+        self.scope = scope
+        self.fields = fields
+        self.request_url = REQUEST_URL + '?scope=' + self.scope
 
         self.login_route = 'velruse.%s-login' % name
         self.callback_route = 'velruse.%s-callback' % name
 
     def login(self, request):
-        """Initiate a LinkedIn login"""
+        """Initiate a LinkedIn login"""        
         # Create the consumer and client, make the request
+        
         consumer = oauth.Consumer(self.consumer_key, self.consumer_secret)
         sigmethod = oauth.SignatureMethod_HMAC_SHA1()
         params = {'oauth_callback': request.route_url(self.callback_route)}
 
         # We go through some shennanigans here to specify a callback url
         oauth_request = oauth.Request.from_consumer_and_token(consumer,
-            http_url=REQUEST_URL, parameters=params)
+            http_url=self.request_url, parameters=params)
         oauth_request.sign_request(sigmethod, consumer, None)
-        r = requests.get(REQUEST_URL, headers=oauth_request.to_header())
+        r = requests.get(self.request_url, headers=oauth_request.to_header())
 
         if r.status_code != 200:
             raise ThirdPartyFailure("Status %s: %s" % (
@@ -129,8 +137,11 @@ class LinkedInProvider(object):
                             secret=cred['oauthAccessTokenSecret'])
         client = oauth.Client(consumer, token)
         profile_url = 'http://api.linkedin.com/v1/people/~'
-        profile_url += ':(first-name,last-name,id,date-of-birth,picture-url)'
-        profile_url += '?format=json'
+        profile_url += ':(first-name,last-name,id,date-of-birth,picture-url'
+        if self.fields:
+            profile_url += ',' + self.fields
+         
+        profile_url += ')?format=json'
         resp, content = client.request(profile_url)
 
         if resp['status'] != '200':
@@ -149,6 +160,11 @@ class LinkedInProvider(object):
             'domain':'linkedin.com',
             'userid':data['id']
         }]
+        profile['extra'] = {}
+        for key in data:
+            if key not in ['firstName','lastName','id']:
+                profile['extra'][key] = data[key]
+                
         return LinkedInAuthenticationComplete(profile=profile,
                                               credentials=cred,
                                               provider_name=self.name,
